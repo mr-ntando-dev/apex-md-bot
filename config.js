@@ -9,7 +9,7 @@ require('dotenv').config();
 module.exports = {
   // ── Identity ──────────────────────────────────────────────
   BOT_NAME:      process.env.BOT_NAME      || 'APEX-MD',
-  BOT_VERSION:   '2.0.0',
+  BOT_VERSION:   '2.1.0',
   BOT_PREFIX:    process.env.BOT_PREFIX    || '.',
   OWNER_NAME:    process.env.OWNER_NAME    || 'Owner',
   OWNER_NUMBER:  process.env.OWNER_NUMBER  || '',   // e.g. 2348012345678
