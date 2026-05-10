@@ -1,3 +1,4 @@
+const { downloadViaApi } = require('../../lib/downloadViaApi');
 const { cobaltDownload } = require('../../lib/cobalt');
 
 module.exports = {
@@ -11,8 +12,15 @@ module.exports = {
 
     await sock.sendMessage(from, { text: '⬇️ Downloading Instagram content...' }, { quoted: msg });
     try {
-      const buffer = await cobaltDownload(url);
-      return sock.sendMessage(from, { video: buffer, mimetype: 'video/mp4', caption: '📸 Downloaded via APEX-MD' }, { quoted: msg });
+      let buffer, mimetype;
+      try {
+        const r = await downloadViaApi(url, 'video');
+        buffer  = r.buffer; mimetype = r.mimetype;
+      } catch {
+        buffer  = await cobaltDownload(url);
+        mimetype = 'video/mp4';
+      }
+      return sock.sendMessage(from, { video: buffer, mimetype, caption: '📸 Downloaded via APEX-MD' }, { quoted: msg });
     } catch (err) {
       return sock.sendMessage(from, { text: `❌ Instagram download failed: ${err.message}` }, { quoted: msg });
     }
