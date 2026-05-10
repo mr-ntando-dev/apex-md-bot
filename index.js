@@ -52,13 +52,16 @@ async function startBot() {
   const { version }          = await fetchLatestBaileysVersion();
   logger.info(`[Boot] Using Baileys v${version.join('.')}`);
 
+  // Use pairing code if PAIRING_CODE=true in .env, otherwise fall back to QR
+  const usePairingCode = process.env.PAIRING_CODE === 'true';
+
   const sock = makeWASocket({
     version,
     auth: {
       creds: state.creds,
       keys:  makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
     },
-    printQRInTerminal:              false,
+    printQRInTerminal:              !usePairingCode,
     logger:                         pino({ level: 'silent' }),
     browser:                        ['APEX-MD', 'Chrome', '120.0.0'],
     markOnlineOnConnect:            true,
@@ -66,10 +69,25 @@ async function startBot() {
     generateHighQualityLinkPreview: true,
   });
 
+  // Request pairing code once if not yet registered
+  if (usePairingCode && !sock.authState.creds.registered) {
+    const phoneNumber = String(config.OWNER_NUMBER).replace(/[^0-9]/g, '');
+    try {
+      const pairingCode = await sock.requestPairingCode(phoneNumber);
+      console.log('\n╔══════════════════════════════════╗');
+      console.log(`║  ⚡ PAIRING CODE: ${pairingCode.match(/.{1,4}/g).join('-')}  ║`);
+      console.log('║  WhatsApp → Linked Devices →     ║');
+      console.log('║  Link with phone number instead  ║');
+      console.log('╚══════════════════════════════════╝\n');
+    } catch (err) {
+      logger.warn(`[Pairing] Could not get pairing code: ${err.message}`);
+    }
+  }
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
 
-    if (qr) {
+    if (qr && !usePairingCode) {
       console.log('\n📱 Scan this QR code with WhatsApp (Linked Devices > Link Device):\n');
       qrcode.generate(qr, { small: true });
     }
