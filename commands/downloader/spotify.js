@@ -1,6 +1,6 @@
 const fetch    = require('node-fetch');
 const ytSearch = require('yt-search');
-const ytdl     = require('ytdl-core');
+const ytdl     = require('@distube/ytdl-core');
 
 module.exports = {
   name: 'spotify', aliases: ['sp', 'spotifydl'], category: 'downloader',
