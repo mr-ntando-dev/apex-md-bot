@@ -3,9 +3,8 @@
 //  The most advanced WhatsApp Multi-Device Bot — 2026 Edition
 //  Built on @whiskeysockets/baileys
 //
-//  BOT ONLY — no API server in this repo.
-//  The REST API lives in apex-md-api (Render).
-//  They talk via MongoDB job queue.
+//  BOT ONLY — all logic fetched from apex-md-api at runtime.
+//  No local lib/ or commands/ needed.
 // ============================================================
 
 const {
@@ -17,16 +16,34 @@ const {
   isJidBroadcast,
 } = require('@whiskeysockets/baileys');
 
-const pino       = require('pino');
-const fs         = require('fs');
-const qrcode     = require('qrcode-terminal');
-const config     = require('./config');
-const logger     = require('./lib/logger');
-const db         = require('./lib/database');
-const { handleMessage, loadCommands } = require('./lib/handler');
-const { startJobWorker }              = require('./lib/jobWorker');
-const startKeepAlive                  = require('./lib/keepAlive');
-const { restoreSession }              = require('./lib/session');
+const pino    = require('pino');
+const fs      = require('fs');
+const qrcode  = require('qrcode-terminal');
+const config  = require('./config');
+
+const API_BASE = process.env.API_BASE_URL || 'https://apex-md-api-mi7s.onrender.com';
+const API_KEY  = process.env.API_SECRET   || '';
+
+// ── Minimal logger (no local lib dependency) ──────────────────
+const logger = {
+  info:  (...a) => console.log(`[${new Date().toISOString()}] INFO:`, ...a),
+  warn:  (...a) => console.warn(`[${new Date().toISOString()}] WARN:`, ...a),
+  error: (...a) => console.error(`[${new Date().toISOString()}] ERROR:`, ...a),
+};
+
+// ── API helper ────────────────────────────────────────────────
+async function apiCall(method, endpoint, body) {
+  const fetch = (await import('node-fetch')).default;
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': API_KEY },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(`${API_BASE}${endpoint}`, opts);
+  const json = await res.json();
+  if (!json.ok) throw new Error(json.error || 'API error');
+  return json.data;
+}
 
 // ── Splash ────────────────────────────────────────────────────
 console.log(`
@@ -34,25 +51,27 @@ console.log(`
 ║       ⚡  APEX-MD  WhatsApp Bot  ⚡       ║
 ║         v${config.BOT_VERSION}  |  2026 Edition          ║
 ║   The most advanced MD bot ever built    ║
-║   API Bridge: MongoDB job queue  🔗      ║
+║   All commands via API 🔗                ║
 ╚══════════════════════════════════════════╝
 `);
 
 async function startBot() {
-  loadCommands();
-  await db.connect();
+  // Verify API is reachable
+  try {
+    const status = await apiCall('GET', '/api/status');
+    logger.info(`[API] Connected to ${status.api} v${status.version}`);
+  } catch (e) {
+    logger.warn(`[API] Could not reach API: ${e.message} — bot will still run, commands dispatched via DB`);
+  }
 
   if (!fs.existsSync(config.SESSION_DIR)) {
     fs.mkdirSync(config.SESSION_DIR, { recursive: true });
   }
 
-  restoreSession();
-
   const { state, saveCreds } = await useMultiFileAuthState(config.SESSION_DIR);
   const { version }          = await fetchLatestBaileysVersion();
   logger.info(`[Boot] Using Baileys v${version.join('.')}`);
 
-  // Use pairing code if PAIRING_CODE=true in .env, otherwise fall back to QR
   const usePairingCode = process.env.PAIRING_CODE === 'true';
 
   const sock = makeWASocket({
@@ -69,7 +88,7 @@ async function startBot() {
     generateHighQualityLinkPreview: true,
   });
 
-  // Request pairing code once if not yet registered
+  // Request pairing code if configured
   if (usePairingCode && !sock.authState.creds.registered) {
     const phoneNumber = String(config.OWNER_NUMBER).replace(/[^0-9]/g, '');
     try {
@@ -109,8 +128,10 @@ async function startBot() {
     if (connection === 'open') {
       logger.info(`[Connection] ✅ APEX-MD online as ${sock.user?.id}`);
 
-      startJobWorker(sock);   // poll MongoDB for API jobs
-      startKeepAlive();       // ping Render every 14 min
+      // Start keep-alive pinger to API
+      setInterval(async () => {
+        try { await apiCall('GET', '/ping'); } catch {}
+      }, 14 * 60 * 1000);
 
       await sock.sendMessage(config.OWNER_NUMBER + '@s.whatsapp.net', {
         text: [
@@ -118,7 +139,7 @@ async function startBot() {
           `Version: ${config.BOT_VERSION}`,
           `Prefix: ${config.BOT_PREFIX}`,
           `Mode: ${config.PUBLIC_MODE ? 'Public' : 'Private'}`,
-          `API Bridge: ${config.DB_ENABLED ? '🟢 Active' : '🔴 No MongoDB — set MONGODB_URI'}`,
+          `API: 🟢 ${API_BASE}`,
           ``,
           `Type ${config.BOT_PREFIX}help to see commands.`,
         ].join('\n'),
@@ -130,20 +151,9 @@ async function startBot() {
 
   sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
     if (!['add', 'remove'].includes(action)) return;
-    const groupData = await db.getGroup(id);
-    for (const jid of participants) {
-      const name = jid.split('@')[0];
-      const meta = await sock.groupMetadata(id).catch(() => null);
-      if (action === 'add' && groupData.welcome) {
-        const msg = (groupData.welcomeMsg || `Welcome to {group}, @{user}! 👋`)
-          .replace('{group}', meta?.subject || 'the group')
-          .replace('{user}', name);
-        await sock.sendMessage(id, { text: msg, mentions: [jid] });
-      }
-      if (action === 'remove' && groupData.goodbye) {
-        await sock.sendMessage(id, { text: `👋 @${name} has left the group.`, mentions: [jid] });
-      }
-    }
+    try {
+      await apiCall('POST', '/api/auto-welcome', { groupId: id, participants, action });
+    } catch {}
   });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
@@ -153,27 +163,43 @@ async function startBot() {
       if (isJidBroadcast(msg.key.remoteJid || '')) continue;
       if (msg.key.fromMe)                          continue;
 
-      // DB-driven auto-replies
-      try {
-        const rules = await db.getAllAutoReplies();
-        if (rules.length) {
-          const body = (
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text || ''
-          ).toLowerCase().trim();
-          for (const rule of rules) {
-            const hit = rule.exact
-              ? body === rule.keyword.toLowerCase()
-              : body.includes(rule.keyword.toLowerCase());
-            if (hit) {
-              await sock.sendMessage(msg.key.remoteJid, { text: rule.reply }, { quoted: msg });
-              break;
-            }
-          }
-        }
-      } catch {}
+      const from   = msg.key.remoteJid;
+      const sender = from.endsWith('@g.us') ? msg.key.participant : from;
+      const body   = (
+        msg.message.conversation ||
+        msg.message.extendedTextMessage?.text ||
+        msg.message.imageMessage?.caption ||
+        msg.message.videoMessage?.caption ||
+        ''
+      ).trim();
 
-      await handleMessage(sock, msg);
+      // ── Auto-read ──────────────────────────────────────
+      if (config.AUTO_READ) await sock.readMessages([msg.key]).catch(() => {});
+
+      // ── Auto-typing for commands ───────────────────────
+      if (config.AUTO_TYPING && body.startsWith(config.BOT_PREFIX)) {
+        await sock.sendPresenceUpdate('composing', from).catch(() => {});
+      }
+
+      // ── Route everything to API ────────────────────────
+      try {
+        await apiCall('POST', '/api/handle-message', {
+          from,
+          sender,
+          body,
+          isGroup:    from.endsWith('@g.us'),
+          key:        msg.key,
+          message:    msg.message,
+          pushName:   msg.pushName || '',
+        });
+      } catch (e) {
+        // If API fails for a command, notify user
+        if (body.startsWith(config.BOT_PREFIX)) {
+          await sock.sendMessage(from, {
+            text: `⚠️ Command could not be processed. API may be offline.`
+          }, { quoted: msg }).catch(() => {});
+        }
+      }
     }
   });
 
