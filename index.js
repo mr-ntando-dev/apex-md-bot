@@ -20,16 +20,12 @@ const pino    = require('pino');
 const fs      = require('fs');
 const qrcode  = require('qrcode-terminal');
 const config  = require('./config');
+const logger  = require('./lib/logger');
+const db      = require('./lib/database');
+const { startJobWorker } = require('./lib/jobWorker');
 
 const API_BASE = process.env.API_BASE_URL || 'https://apex-md-api-mi7s.onrender.com';
 const API_KEY  = process.env.API_SECRET   || 'e06912e7cc57172ba23a5c73817b50afd414f9aa1bb0ab472bd0d58c9a40b5a3';
-
-// ── Minimal logger (no local lib dependency) ──────────────────
-const logger = {
-  info:  (...a) => console.log(`[${new Date().toISOString()}] INFO:`, ...a),
-  warn:  (...a) => console.warn(`[${new Date().toISOString()}] WARN:`, ...a),
-  error: (...a) => console.error(`[${new Date().toISOString()}] ERROR:`, ...a),
-};
 
 // ── API helper ────────────────────────────────────────────────
 async function apiCall(method, endpoint, body) {
@@ -56,12 +52,15 @@ console.log(`
 `);
 
 async function startBot() {
+  // Connect to MongoDB (shared job queue with API)
+  await db.connect();
+
   // Verify API is reachable
   try {
     const status = await apiCall('GET', '/api/status');
     logger.info(`[API] Connected to ${status.api} v${status.version}`);
   } catch (e) {
-    logger.warn(`[API] Could not reach API: ${e.message} — bot will still run, commands dispatched via DB`);
+    logger.warn(`[API] Could not reach API: ${e.message} — bot will still run via job queue`);
   }
 
   if (!fs.existsSync(config.SESSION_DIR)) {
@@ -127,6 +126,9 @@ async function startBot() {
 
     if (connection === 'open') {
       logger.info(`[Connection] ✅ APEX-MD online as ${sock.user?.id}`);
+
+      // Start job worker — polls MongoDB for API jobs
+      startJobWorker(sock);
 
       // Start keep-alive pinger to API
       setInterval(async () => {
