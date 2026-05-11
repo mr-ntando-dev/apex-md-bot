@@ -22,7 +22,7 @@ const qrcode  = require('qrcode-terminal');
 const config  = require('./config');
 
 const API_BASE = process.env.API_BASE_URL || 'https://apex-md-api-mi7s.onrender.com';
-const API_KEY  = process.env.API_SECRET   || '';
+const API_KEY  = process.env.API_SECRET   || 'e06912e7cc57172ba23a5c73817b50afd414f9aa1bb0ab472bd0d58c9a40b5a3';
 
 // ── Minimal logger (no local lib dependency) ──────────────────
 const logger = {
