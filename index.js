@@ -80,7 +80,7 @@ async function startBot() {
       creds: state.creds,
       keys:  makeCacheableSignalKeyStore(state.keys, pino({ level: 'silent' })),
     },
-    printQRInTerminal:              !usePairingCode,
+    // printQRInTerminal removed — deprecated in latest Baileys
     logger:                         pino({ level: 'silent' }),
     browser:                        ['APEX-MD', 'Chrome', '120.0.0'],
     markOnlineOnConnect:            true,
